@@ -1,244 +1,270 @@
-
-import React, { useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import {
   client,
   useConfig,
   useElementData,
   useElementColumns,
 } from "@sigmacomputing/plugin";
-import * as XLSX from "xlsx"; // Ensure SheetJS is installed.
 import "./App.css";
 
-// Configure your plugin’s editor panel.
 client.config.configureEditorPanel([
   { name: "source", type: "element" },
   { name: "pivotRows", type: "column", source: "source", allowMultiple: true },
   { name: "measures", type: "column", source: "source", allowMultiple: true },
 ]);
 
-// Helper to format a timestamp (if needed) into mm/dd/yyyy.
-function formatDate(timestamp) {
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-}
-
-// Helper to clean column names: keep only the part after the first "/" if it exists.
-function cleanColumnName(colName) {
-  if (!colName) return "";
-  const idx = colName.indexOf("/");
-  return idx !== -1 ? colName.substring(idx + 1) : colName;
-}
+const AGGREGATION_OPTIONS = ["SUM", "AVG", "COUNT", "MAX", "MIN"];
 
 function App() {
   const config = useConfig();
   const sigmaData = useElementData(config.source);
   const elementColumns = useElementColumns(config.source);
-  console.log('Config ', config)
+
   const pivotRows = config.pivotRows || [];
   const measures = config.measures || [];
-  
-  // Check if any data is loaded.
-  const dataLoaded = Object.values(sigmaData).some(
-    (col) => Array.isArray(col) && col.length > 0
+
+  const getDefaultSelection = () =>
+    pivotRows.reduce(
+      (acc, col, index) => ({ ...acc, [col]: index !== pivotRows.length - 1 }),
+      {}
+    );
+
+  const [coloredItemsMap, setColoredItemsMap] = useState(getDefaultSelection);
+  const [measureAggregations, setMeasureAggregations] = useState(
+    measures.reduce((acc, col) => ({ ...acc, [col]: "SUM" }), {})
   );
 
-  // 1) GROUP the data by the unique combination of pivot row values,
-  //    summing the measure values.
-  const groupedData = useMemo(() => {
-    if (!dataLoaded || pivotRows.length === 0 || measures.length === 0)
-      return {};
-    const grouped = {};
-    const n = sigmaData[pivotRows[0]].length;
-    for (let i = 0; i < n; i++) {
-      const pivotValues = pivotRows.map((colId) => {
-        let val = sigmaData[colId][i];
-        if (elementColumns[colId]?.columnType === "datetime") {
-          val = formatDate(val);
-        }
-        return val;
-      });
-      const key = pivotValues.join(" | ");
-      if (!grouped[key]) {
-        grouped[key] = { pivotValues, measures: {} };
-        measures.forEach((m) => {
-          grouped[key].measures[m] = 0;
+  useEffect(() => {
+    setColoredItemsMap(getDefaultSelection());
+  }, [pivotRows]);
+
+  useEffect(() => {
+    setMeasureAggregations(
+      measures.reduce(
+        (acc, col) => ({ ...acc, [col]: measureAggregations[col] || "SUM" }),
+        {}
+      )
+    );
+  }, [measures]);
+
+  const handleCheckboxChange = (col) => {
+    setColoredItemsMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  };
+
+  const handleAggregationChange = (col, value) => {
+    setMeasureAggregations((prev) => ({ ...prev, [col]: value }));
+  };
+
+  const handleSendData = async () => {
+    const payload = {
+      pivotRows: pivotRows.map((col, index) => ({
+        id: col,
+        name: elementColumns[col]?.name || col,
+        type: elementColumns[col]?.columnType || "unknown",
+        order: index,
+        coloredItems: coloredItemsMap[col] || false,
+      })),
+      measures: measures.map((col, index) => ({
+        id: col,
+        name: elementColumns[col]?.name || col,
+        type: elementColumns[col]?.columnType || "unknown",
+        order: index,
+        aggregation: measureAggregations[col] || "SUM",
+      })),
+      data: Object.keys(sigmaData[pivotRows[0]] || []).map((_, rowIndex) => {
+        let row = {};
+        [...pivotRows, ...measures].forEach((col) => {
+          let value = sigmaData[col][rowIndex];
+          if (elementColumns[col]?.columnType === "datetime") {
+            value = new Date(value).toISOString().split("T")[0];
+          }
+          row[col] = value;
         });
-      }
-      measures.forEach((m) => {
-        grouped[key].measures[m] += sigmaData[m][i];
-      });
-    }
-    return grouped;
-  }, [sigmaData, pivotRows, measures, dataLoaded, elementColumns]);
+        return row;
+      }),
+    };
 
-  // 2) BUILD an array of table rows from groupedData.
-  // Each row is: [pivotValue1, pivotValue2, ..., sumMeasure1, sumMeasure2, ...]
-  const tableRows = useMemo(() => {
-    const rows = [];
-    Object.keys(groupedData).forEach((key) => {
-      const group = groupedData[key];
-      const row = [...group.pivotValues];
-      measures.forEach((m) => row.push(group.measures[m]));
-      rows.push(row);
-    });
-    // Sort rows by ALL pivot rows (oldest to newest for datetime)
-    rows.sort((a, b) => {
-      for (let i = 0; i < pivotRows.length; i++) {
-        const colId = pivotRows[i];
-        if (elementColumns[colId]?.columnType === "datetime") {
-          const diff = new Date(a[i]) - new Date(b[i]);
-          if (diff !== 0) return diff;
-        } else {
-          const cmp = String(a[i]).localeCompare(String(b[i]));
-          if (cmp !== 0) return cmp;
-        }
-      }
-      return 0;
-    });
-    return rows;
-  }, [groupedData, measures, pivotRows, elementColumns]);
-
-  // 3) ADD SUBTOTAL ROWS for each group of the FIRST pivot row, plus a GRAND TOTAL row.
-  const rowsWithTotals = useMemo(() => {
-    if (tableRows.length === 0) return [];
-    let result = [];
-    let currentPivotVal = tableRows[0][0];
-    let measureAcc = Array(measures.length).fill(0);
-    let grandAcc = Array(measures.length).fill(0);
-    function pushSubtotalRow(pivotVal, measureValues) {
-      const subtotalRow = Array(pivotRows.length + measures.length).fill("");
-      subtotalRow[0] = `Total for ${pivotVal}`;
-      measureValues.forEach((val, idx) => {
-        subtotalRow[pivotRows.length + idx] = val;
-      });
-      result.push(subtotalRow);
-    }
-    for (let i = 0; i < tableRows.length; i++) {
-      const row = [...tableRows[i]];
-      const pivotVal = row[0];
-      if (pivotVal !== currentPivotVal) {
-        pushSubtotalRow(currentPivotVal, measureAcc);
-        measureAcc = Array(measures.length).fill(0);
-        currentPivotVal = pivotVal;
-      }
-      result.push(row);
-      for (let mIdx = 0; mIdx < measures.length; mIdx++) {
-        const measureVal = row[pivotRows.length + mIdx];
-        measureAcc[mIdx] += measureVal;
-        grandAcc[mIdx] += measureVal;
-      }
-    }
-    pushSubtotalRow(currentPivotVal, measureAcc);
-    const grandRow = Array(pivotRows.length + measures.length).fill("");
-    grandRow[0] = "Grand Total";
-    grandAcc.forEach((val, idx) => {
-      grandRow[pivotRows.length + idx] = val;
-    });
-    result.push(grandRow);
-    return result;
-  }, [tableRows, pivotRows, measures]);
-
-  // 4) BUILD tableWithRowSpan for computing merge ranges.
-  const tableWithRowSpan = useMemo(() => {
-    const merged = [];
-    let prev = null;
-    let rowspan = 1;
-    rowsWithTotals.forEach((row) => {
-      if (
-        typeof row[0] === "string" &&
-        (row[0].startsWith("Total for") || row[0].startsWith("Grand Total"))
-      ) {
-        if (prev) {
-          merged.push({ row: prev, rowspan });
-          prev = null;
-          rowspan = 1;
-        }
-        merged.push({ row, rowspan: 1 });
-      } else {
-        if (prev && prev[0] === row[0]) {
-          rowspan++;
-          row[0] = null;
-        } else {
-          if (prev) merged.push({ row: prev, rowspan });
-          prev = row;
-          rowspan = 1;
-        }
-      }
-    });
-    if (prev) merged.push({ row: prev, rowspan });
-    return merged;
-  }, [rowsWithTotals]);
-
-  // 5) EXPORT TO EXCEL with column headers using actual column names from useElementColumns.
-  const handleExportExcel = () => {
-    // Build export header using actual column names from elementColumns.
-    console.log(" pivotRows ", pivotRows);
     
-    const headerRow = [
-      ...pivotRows.map((col) =>
-        elementColumns[col] && elementColumns[col].name
-          ? elementColumns[col].name
-          : col
-      ),
-      ...measures.map((col) =>
-        elementColumns[col] && elementColumns[col].name
-          ? elementColumns[col].name
-          : col
-      ),
-    ];
-    const exportData = [headerRow, ...rowsWithTotals];
-    
-    // Compute merge ranges for the first column in exportData.
-    const merges = [];
-    let start = null;
-    for (let i = 1; i < exportData.length; i++) {
-      if (!exportData[i]) continue;
-      const rowVal = exportData[i][0];
-      if (
-        typeof rowVal === "string" &&
-        (rowVal.startsWith("Total for") || rowVal.startsWith("Grand Total"))
-      ) {
-        if (start !== null && i - start > 1) {
-          merges.push({ s: { r: start, c: 0 }, e: { r: i - 1, c: 0 } });
-        }
-        start = null;
-        continue;
-      }
-      if (start === null) {
-        start = i;
-      }
-      if (
-        i === exportData.length - 1 ||
-        !exportData[i + 1] ||
-        exportData[i + 1][0] !== rowVal ||
-        (typeof exportData[i + 1][0] === "string" &&
-          (exportData[i + 1][0].startsWith("Total for") ||
-           exportData[i + 1][0].startsWith("Grand Total")))
-      ) {
-        const end = i;
-        if (end - start >= 1) {
-          merges.push({ s: { r: start, c: 0 }, e: { r: end, c: 0 } });
-        }
-        start = null;
-      }
-    }
-    
-    const ws = XLSX.utils.aoa_to_sheet(exportData);
-    ws["!merges"] = merges;
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    XLSX.writeFile(wb, "export.xlsx");
+
+  const response = await fetch("http://localhost:8005/process", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    console.error("Failed to download file:", response.statusText);
+    return;
+  }
+
+  // Convert response to a blob
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+
+  // Create a temporary <a> element to trigger download
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "processed_data.xlsx"; // You can adjust this to match the backend filename
+  document.body.appendChild(a);
+  a.click();
+
+  // Cleanup
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
   };
 
   return (
-    <div style={{ position: "absolute", top: "0", left: "0" }}>
-      <button onClick={handleExportExcel}>Export Data as Excel</button>
+    <div style={styles.container}>
+      <h3 style={styles.heading}>Data Export Configuration</h3>
+
+      <div style={styles.configContainer}>
+        {/* Pivot Rows Section */}
+        <div style={{ ...styles.configBox, flexGrow: 1 }}>
+          <h4 style={styles.subheading}>Pivot Rows</h4>
+          <p style={styles.description}>Select which pivot rows to highlight.</p>
+          <div style={styles.checkboxContainer}>
+            {pivotRows.map((col) => (
+              <label key={col} style={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={coloredItemsMap[col] || false}
+                  onChange={() => handleCheckboxChange(col)}
+                  style={styles.checkbox}
+                />
+                <span style={styles.noWrap}>{elementColumns[col]?.name || col}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Measures Section */}
+        <div style={{ ...styles.configBox, flexGrow: 1 }}>
+          <h4 style={styles.subheading}>Measures</h4>
+          <p style={styles.description}>Select aggregation type for measures.</p>
+          <div style={styles.measureContainer}>
+            {measures.map((col) => (
+              <div key={col} style={styles.measureRow}>
+                <span style={styles.noWrap}>{elementColumns[col]?.name || col}</span>
+                <select
+                  value={measureAggregations[col]}
+                  onChange={(e) => handleAggregationChange(col, e.target.value)}
+                  style={styles.dropdown}
+                >
+                  {AGGREGATION_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Export Button */}
+      <button onClick={handleSendData} style={styles.button}>
+        Export Data as Excel
+      </button>
     </div>
   );
 }
+
+// Styles
+const styles = {
+  container: {
+    position: "absolute",
+    top: "10px",
+    left: "10px",
+    padding: "25px",
+    background: "#fff",
+    borderRadius: "12px",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+    display: "flex",
+    flexDirection: "column",
+    width: "fit-content",
+    fontFamily: "Inter, sans-serif",
+  },
+  heading: {
+    fontSize: "22px",
+    fontWeight: "bold",
+    color: "#333",
+    marginBottom: "20px",
+  },
+  configContainer: {
+    display: "flex",
+    gap: "20px",
+    width: "100%",
+  },
+  configBox: {
+    padding: "15px",
+    borderRadius: "10px",
+    background: "#f9f9f9",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+    minWidth: "250px",
+  },
+  subheading: {
+    fontSize: "18px",
+    fontWeight: "bold",
+    color: "#007BFF",
+    marginBottom: "10px",
+  },
+  description: {
+    fontSize: "14px",
+    color: "#666",
+    marginBottom: "10px",
+  },
+  checkboxContainer: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+  },
+  checkboxLabel: {
+    display: "flex",
+    alignItems: "center",
+    fontSize: "16px",
+    color: "#333",
+    cursor: "pointer",
+  },
+  noWrap: {
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  checkbox: {
+    marginRight: "10px",
+    cursor: "pointer",
+  },
+  measureContainer: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+  },
+  measureRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    fontSize: "16px",
+    color: "#333",
+    whiteSpace: "nowrap",
+  },
+  dropdown: {
+    padding: "8px",
+    fontSize: "16px",
+    borderRadius: "6px",
+    border: "1px solid #ccc",
+  },
+  button: {
+    marginTop: "25px",
+    padding: "12px 18px",
+    fontSize: "18px",
+    backgroundColor: "#007BFF",
+    color: "#fff",
+    border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+    transition: "0.2s",
+  },
+};
 
 export default App;
