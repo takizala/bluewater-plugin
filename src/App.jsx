@@ -8,12 +8,27 @@ import {
 import "./App.css";
 
 client.config.configureEditorPanel([
-  { name: "source", type: "element" },
-  { name: "pivotRows", type: "column", source: "source", allowMultiple: true },
-  { name: "measures", type: "column", source: "source", allowMultiple: true },
+  { 
+    name: "source", 
+    type: "element" 
+  },
+  { 
+    name: "pivotRows", 
+    type: "column", 
+    source: "source", 
+    allowMultiple: true , 
+    allowTypes: ["text","string", "datetime"]
+  },
+  { 
+    name: "measures", 
+    type: "column", 
+    source: "source", 
+    allowMultiple: true , 
+    allowedTypes: ["number"]
+  },
 ]);
 
-const AGGREGATION_OPTIONS = ["SUM", "AVG", "COUNT", "MAX", "MIN"];
+const AGGREGATION_OPTIONS = ["SUM", "AVG", "MAX", "MIN"];
 
 function App() {
   const config = useConfig();
@@ -86,7 +101,7 @@ function App() {
 
     
 
-  const response = await fetch("http://localhost:8005/process", {
+  const response = await fetch("https://bluewater-cyw0.onrender.com/process", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
