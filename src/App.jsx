@@ -14,14 +14,14 @@ const getCurrentDateTime = () => {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
-  }).replace(/\//g, '-');
+  }).replace(/\//g, '.');
   
   const timeString = now.toLocaleTimeString('en-US', {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
-  }).replace(/:/g, '-');
+  }).replace(/:/g, '.');
   
   return `${dateString}_${timeString}`;
 };
@@ -55,7 +55,7 @@ client.config.configureEditorPanel([
   {
     name: "File-Name",
     type: "text",
-    defaultValue: `Export_${getCurrentDateTime()}`,
+    defaultValue: ``,
   }
 ]);
 
@@ -140,7 +140,7 @@ function App() {
         }),
       };
       
-      const response = await fetch("http://localhost:8005/process", {
+      const response = await fetch("https://bluewater-six.vercel.app/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -158,7 +158,7 @@ function App() {
       // Create a temporary <a> element to trigger download
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${fileName}.xlsx`;
+      a.download = `${fileName || `Export-${getCurrentDateTime()}`}.xlsx`;
       document.body.appendChild(a);
       a.click();
     
