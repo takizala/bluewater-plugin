@@ -26,8 +26,6 @@ const getCurrentDateTime = () => {
   return `${dateString}_${timeString}`;
 };
 
-
-
 client.config.configureEditorPanel([
   {
      name: "source",
@@ -76,11 +74,14 @@ function App() {
     );
 
   const [coloredItemsMap, setColoredItemsMap] = useState(getDefaultSelection);
+  const [countOnMap, setCountOnMap] = useState(getDefaultSelection);
   const [measureAggregations, setMeasureAggregations] = useState(
     measures.reduce((acc, col) => ({ ...acc, [col]: "SUM" }), {})
   );
+  
   useEffect(() => {
     setColoredItemsMap(getDefaultSelection());
+    setCountOnMap(getDefaultSelection());
   }, [pivotRows]);
 
   useEffect(() => {
@@ -96,6 +97,10 @@ function App() {
 
   const handleCheckboxChange = (col) => {
     setColoredItemsMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  };
+
+  const handleCountOnChange = (col) => {
+    setCountOnMap((prev) => ({ ...prev, [col]: !prev[col] }));
   };
 
   const handleAggregationChange = (col, value) => {
@@ -115,6 +120,7 @@ function App() {
           type: elementColumns[col]?.columnType || "unknown",
           order: index,
           coloredItems: coloredItemsMap[col] || false,
+          countOn: countOnMap[col] || false,
         })),
         measures: measures.map((col, index) => ({
           id: col,
@@ -174,90 +180,115 @@ function App() {
 
   return (
     <div style={styles.container}>
-      <h3 style={styles.heading}>Data Export Configuration</h3>
-      <div style={styles.configContainer}>
-        {/* Pivot Rows Section */}
-        <div style={{ ...styles.configBox, flexGrow: 1 }}>
-          <h4 style={styles.subheading}>Pivot Rows</h4>
-          <p style={styles.description}>Select which pivot rows to highlight.</p>
-          <div style={styles.checkboxContainer}>
-            {pivotRows.length > 0 ? (
-              pivotRows.map((col) => (
-                <label key={col} style={styles.checkboxLabel}>
-                  <input
-                    type="checkbox"
-                    checked={coloredItemsMap[col] || false}
-                    onChange={() => handleCheckboxChange(col)}
-                    style={styles.checkbox}
-                  />
-                  <span style={styles.noWrap}>{elementColumns[col]?.name || col}</span>
-                </label>
-              ))
-            ) : (
-              <p style={styles.emptyMessage}>Please select pivot rows in the configuration panel</p>
-            )}
+      <div style={styles.card}>
+        <div style={styles.cardHeader}>
+          <h3 style={styles.heading}>Data Export Configuration</h3>
+        </div>
+        
+        <div style={styles.cardContent}>
+          {/* Pivot Rows Section */}
+          <div style={styles.section}>
+            <div style={styles.sectionHeader}>
+              <h4 style={styles.subheading}>Pivot Rows</h4>
+              <p style={styles.description}>Select which pivot rows to highlight </p>
+            </div>
+            
+            <div style={styles.itemList}>
+              {pivotRows.length > 0 ? (
+                pivotRows.map((col) => (
+                  <div key={col} style={styles.pivotRowItem}>
+                    <span style={styles.pivotName}>{elementColumns[col]?.name || col}</span>
+                    <div style={styles.checkboxGroup}>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={coloredItemsMap[col] || false}
+                          onChange={() => handleCheckboxChange(col)}
+                          style={styles.checkbox}
+                        />
+                        <span style={styles.checkboxText}>Highlight</span>
+                      </label>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={countOnMap[col] || false}
+                          onChange={() => handleCountOnChange(col)}
+                          style={styles.checkbox}
+                        />
+                        <span style={styles.checkboxText}>Count On Label</span>
+                      </label>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p style={styles.emptyMessage}>Please select pivot rows in the configuration panel</p>
+              )}
+            </div>
+          </div>
+          
+          {/* Measures Section */}
+          <div style={styles.section}>
+            <div style={styles.sectionHeader}>
+              <h4 style={styles.subheading}>Measures</h4>
+              <p style={styles.description}>Select aggregation type for measures.</p>
+            </div>
+            
+            <div style={styles.itemList}>
+              {measures.length > 0 ? (
+                measures.map((col) => (
+                  <div key={col} style={styles.measureRow}>
+                    <span style={styles.measureName}>{elementColumns[col]?.name || col}</span>
+                    <select
+                      value={measureAggregations[col]}
+                      onChange={(e) => handleAggregationChange(col, e.target.value)}
+                      style={styles.dropdown}
+                    >
+                      {AGGREGATION_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))
+              ) : (
+                <p style={styles.emptyMessage}>Please select measures in the configuration panel</p>
+              )}
+            </div>
           </div>
         </div>
-        {/* Measures Section */}
-        <div style={{ ...styles.configBox, flexGrow: 1 }}>
-          <h4 style={styles.subheading}>Measures</h4>
-          <p style={styles.description}>Select aggregation type for measures.</p>
-          <div style={styles.measureContainer}>
-            {measures.length > 0 ? (
-              measures.map((col) => (
-                <div key={col} style={styles.measureRow}>
-                  <span style={styles.noWrap}>{elementColumns[col]?.name || col}</span>
-                  <select
-                    value={measureAggregations[col]}
-                    onChange={(e) => handleAggregationChange(col, e.target.value)}
-                    style={styles.dropdown}
-                  >
-                    {AGGREGATION_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ))
+        
+        {/* Export Button with Loading State */}
+        <div style={styles.cardFooter}>
+          <button 
+            onClick={handleSendData} 
+            style={{
+              ...styles.button,
+              ...(isExportDisabled ? styles.buttonDisabled : {})
+            }}
+            disabled={isExportDisabled}
+          >
+            {isLoading ? (
+              <>
+                <div style={styles.spinner}></div>
+                <span>Exporting...</span>
+              </>
             ) : (
-              <p style={styles.emptyMessage}>Please select measures in the configuration panel</p>
+              "Export Data as Excel"
             )}
-          </div>
+          </button>
+          
+          {!isLoading && (pivotRows.length === 0 || measures.length === 0) && (
+            <p style={styles.helperText}>
+              {pivotRows.length === 0 && measures.length === 0 
+                ? "Please select both pivot rows and measures to enable export" 
+                : pivotRows.length === 0 
+                  ? "Please select pivot rows to enable export" 
+                  : "Please select measures to enable export"}
+            </p>
+          )}
         </div>
       </div>
-      {/* Export Button with Loading State */}
-      <button 
-        onClick={handleSendData} 
-        style={{
-          ...styles.button,
-          ...(isExportDisabled ? styles.buttonDisabled : {}),
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          gap: '10px'
-        }}
-        disabled={isExportDisabled}
-      >
-        {isLoading ? (
-          <>
-            <div style={styles.spinner}></div>
-            <span>Exporting...</span>
-          </>
-        ) : (
-          "Export Data as Excel"
-        )}
-      </button>
-      
-      {!isLoading && (pivotRows.length === 0 || measures.length === 0) && (
-        <p style={styles.helperText}>
-          {pivotRows.length === 0 && measures.length === 0 
-            ? "Please select both pivot rows and measures to enable export" 
-            : pivotRows.length === 0 
-              ? "Please select pivot rows to enable export" 
-              : "Please select measures to enable export"}
-        </p>
-      )}
     </div>
   );
 }
@@ -268,103 +299,141 @@ const styles = {
     position: "absolute",
     top: "10px",
     left: "10px",
-    padding: "25px",
-    background: "#fff",
-    borderRadius: "12px",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-    display: "flex",
-    flexDirection: "column",
-    width: "fit-content",
-    fontFamily: "Inter, sans-serif",
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+  },
+  card: {
+    width: "680px",
+    backgroundColor: "#ffffff",
+    borderRadius: "8px",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.08)",
+    overflow: "hidden",
+    border: "1px solid #eaedf2",
+  },
+  cardHeader: {
+    padding: "16px 20px",
+    borderBottom: "1px solid #eaedf2",
+    backgroundColor: "#f5f7fa",
   },
   heading: {
-    fontSize: "22px",
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: "20px",
+    fontSize: "18px",
+    fontWeight: "600",
+    color: "#2c3e50",
+    margin: "0",
   },
-  configContainer: {
+  cardContent: {
+    padding: "20px",
     display: "flex",
     gap: "20px",
-    width: "100%",
   },
-  configBox: {
-    padding: "15px",
-    borderRadius: "10px",
-    background: "#f9f9f9",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-    minWidth: "250px",
+  section: {
+    flex: "1 1 50%",
+  },
+  sectionHeader: {
+    marginBottom: "12px",
   },
   subheading: {
-    fontSize: "18px",
-    fontWeight: "bold",
-    color: "#007BFF",
-    marginBottom: "10px",
+    fontSize: "16px",
+    fontWeight: "600",
+    color: "#2c3e50",
+    margin: "0 0 4px 0",
   },
   description: {
     fontSize: "14px",
-    color: "#666",
-    marginBottom: "10px",
+    color: "#64748b",
+    margin: "0",
+    lineHeight: "1.4",
   },
-  checkboxContainer: {
+  itemList: {
+    backgroundColor: "#f8f9fb",
+    borderRadius: "6px",
+    padding: "12px",
+    border: "1px solid #eaedf2",
+  },
+  pivotRowItem: {
     display: "flex",
     flexDirection: "column",
-    gap: "10px",
+    padding: "10px 0",
+    borderBottom: "1px solid #eaedf2",
+  },
+  pivotName: {
+    fontWeight: "500",
+    fontSize: "15px",
+    color: "#334155",
+    marginBottom: "8px",
+  },
+  checkboxGroup: {
+    display: "flex",
+    flexWrap: "wrap",
   },
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
-    fontSize: "16px",
-    color: "#333",
+    fontSize: "14px",
+    color: "#475569",
     cursor: "pointer",
-  },
-  noWrap: {
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
+    marginRight: "20px",
   },
   checkbox: {
-    marginRight: "10px",
+    marginRight: "8px",
     cursor: "pointer",
+    width: "16px",
+    height: "16px",
   },
-  measureContainer: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
+  checkboxText: {
+    fontSize: "14px",
   },
   measureRow: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    fontSize: "16px",
-    color: "#333",
-    whiteSpace: "nowrap",
+    padding: "10px 0",
+    borderBottom: "1px solid #eaedf2",
+  },
+  measureName: {
+    fontWeight: "500",
+    fontSize: "15px",
+    color: "#334155",
   },
   dropdown: {
-    padding: "8px",
-    fontSize: "16px",
-    borderRadius: "6px",
-    border: "1px solid #ccc",
+    padding: "8px 12px",
+    fontSize: "14px",
+    borderRadius: "4px",
+    border: "1px solid #d1d5db",
+    backgroundColor: "#fff",
+    color: "#334155",
+    cursor: "pointer",
+    outline: "none",
+    minWidth: "100px",
+  },
+  cardFooter: {
+    padding: "0 20px 20px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
   },
   button: {
-    marginTop: "25px",
-    padding: "12px 18px",
-    fontSize: "18px",
-    backgroundColor: "#007BFF",
+    width: "100%",
+    padding: "12px",
+    fontSize: "15px",
+    fontWeight: "500",
+    backgroundColor: "#1e40af",
     color: "#fff",
     border: "none",
     borderRadius: "6px",
     cursor: "pointer",
-    transition: "0.2s",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: "10px",
+    transition: "background-color 0.2s ease",
   },
   buttonDisabled: {
-    backgroundColor: "#cccccc",
+    backgroundColor: "#94a3b8",
     cursor: "not-allowed",
-    opacity: 0.7,
   },
   spinner: {
-    width: "20px",
-    height: "20px",
+    width: "18px",
+    height: "18px",
     border: "3px solid rgba(255,255,255,0.3)",
     borderRadius: "50%",
     borderTop: "3px solid white",
@@ -372,17 +441,16 @@ const styles = {
   },
   emptyMessage: {
     fontSize: "14px",
-    color: "#888",
-    fontStyle: "italic",
+    color: "#64748b",
+    padding: "10px 0",
+    textAlign: "center",
   },
   helperText: {
-    marginTop: "10px",
+    marginTop: "12px",
     fontSize: "14px",
-    color: "#d9534f",
+    color: "#dc2626",
     textAlign: "center",
   },
 };
-
-
 
 export default App;
