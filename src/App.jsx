@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   client,
   useConfig,
@@ -66,6 +66,9 @@ function App() {
   const pivotRows = config.pivotRows || [];
   const measures = config.measures || [];
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Use a ref to track if we've already auto-populated
+  const autoPopulatedRef = useRef(false);
 
   const getDefaultSelection = () =>
     pivotRows.reduce(
@@ -78,6 +81,46 @@ function App() {
   const [measureAggregations, setMeasureAggregations] = useState(
     measures.reduce((acc, col) => ({ ...acc, [col]: "SUM" }), {})
   );
+  
+  // Function to populate columns - outside useEffect to avoid loops
+  const populateColumns = () => {
+    if (!config.source || !elementColumns || Object.keys(elementColumns).length === 0) {
+      return;
+    }
+    
+    // Filter text/string/datetime columns for pivotRows
+    const pivotRowColumns = Object.keys(elementColumns).filter(col => {
+      const colType = elementColumns[col]?.columnType;
+      return colType === "text" || colType === "string" || colType === "datetime";
+    });
+    
+    // Filter number columns for measures
+    const measureColumns = Object.keys(elementColumns).filter(col => {
+      return elementColumns[col]?.columnType === "number";
+    });
+    
+    // Only update if we found columns
+    if (pivotRowColumns.length > 0 || measureColumns.length > 0) {
+      client.config.set({
+        pivotRows: pivotRowColumns,
+        measures: measureColumns
+      });
+    }
+  };
+  
+  // Track first render with useRef to safely run once
+  const initialRenderRef = useRef(true);
+  
+  // Auto-populate columns when source changes - with safeguards
+  useEffect(() => {
+    // Only run on first render AND when we have a source
+    if (initialRenderRef.current && config.source && elementColumns) {
+      initialRenderRef.current = false;
+      autoPopulatedRef.current = true; // Mark as populated
+      // Safely run outside current render cycle to avoid loops
+      setTimeout(populateColumns, 0);
+    }
+  }, [config.source, elementColumns]);
   
   useEffect(() => {
     setColoredItemsMap(getDefaultSelection());
@@ -105,6 +148,12 @@ function App() {
 
   const handleAggregationChange = (col, value) => {
     setMeasureAggregations((prev) => ({ ...prev, [col]: value }));
+  };
+  
+  const handleRefreshColumns = () => {
+    // Directly call populate columns instead of toggling state
+    autoPopulatedRef.current = true; // Mark as populated to avoid any loops
+    populateColumns();
   };
 
   const handleSendData = async () => {
@@ -183,6 +232,14 @@ function App() {
       <div style={styles.card}>
         <div style={styles.cardHeader}>
           <h3 style={styles.heading}>Data Export Configuration</h3>
+          {config.source && (
+            <button 
+              onClick={handleRefreshColumns}
+              style={styles.refreshButton}
+            >
+              Refresh Columns
+            </button>
+          )}
         </div>
         
         <div style={styles.cardContent}>
@@ -313,12 +370,26 @@ const styles = {
     padding: "16px 20px",
     borderBottom: "1px solid #eaedf2",
     backgroundColor: "#f5f7fa",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   heading: {
     fontSize: "18px",
     fontWeight: "600",
     color: "#2c3e50",
     margin: "0",
+  },
+  refreshButton: {
+    padding: "8px 12px",
+    backgroundColor: "#e2e8f0",
+    color: "#334155",
+    border: "none",
+    borderRadius: "4px",
+    fontWeight: "500",
+    fontSize: "14px",
+    cursor: "pointer",
+    transition: "background-color 0.2s ease",
   },
   cardContent: {
     padding: "20px",
