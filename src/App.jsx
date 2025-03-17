@@ -39,6 +39,13 @@ client.config.configureEditorPanel([
      allowedTypes: ["text","string", "datetime"]
   },
   {
+     name: "pivotColumns",
+     type: "column",
+     source: "source",
+     allowMultiple: true,
+     allowedTypes: ["text","string", "datetime"]
+  },
+  {
      name: "measures",
      type: "column",
      source: "source",
@@ -64,68 +71,75 @@ function App() {
   const sigmaData = useElementData(config.source);
   const elementColumns = useElementColumns(config.source);
   const pivotRows = config.pivotRows || [];
+  const pivotColumns = config.pivotColumns || [];
   const measures = config.measures || [];
   const [isLoading, setIsLoading] = useState(false);
   
   // Use a ref to track if we've already auto-populated
   const autoPopulatedRef = useRef(false);
 
-  const getDefaultSelection = () =>
-    pivotRows.reduce(
-      (acc, col, index) => ({ ...acc, [col]: index !== pivotRows.length - 1 }),
+  const getDefaultSelection = (columns) =>
+    columns.reduce(
+      (acc, col, index) => ({ ...acc, [col]: index !== columns.length - 1 }),
       {}
     );
 
-  const [coloredItemsMap, setColoredItemsMap] = useState(getDefaultSelection);
-  const [countOnMap, setCountOnMap] = useState(getDefaultSelection);
+  const [rowColoredItemsMap, setRowColoredItemsMap] = useState(getDefaultSelection(pivotRows));
+  const [rowCountOnMap, setRowCountOnMap] = useState(getDefaultSelection(pivotRows));
+  
+  const [colColoredItemsMap, setColColoredItemsMap] = useState(getDefaultSelection(pivotColumns));
+  const [colCountOnMap, setColCountOnMap] = useState(getDefaultSelection(pivotColumns));
+  
   const [measureAggregations, setMeasureAggregations] = useState(
     measures.reduce((acc, col) => ({ ...acc, [col]: "SUM" }), {})
   );
   
-  // Function to populate columns - outside useEffect to avoid loops
   const populateColumns = () => {
     if (!config.source || !elementColumns || Object.keys(elementColumns).length === 0) {
       return;
     }
     
-    // Filter text/string/datetime columns for pivotRows
-    const pivotRowColumns = Object.keys(elementColumns).filter(col => {
+    const textColumns = Object.keys(elementColumns).filter(col => {
       const colType = elementColumns[col]?.columnType;
       return colType === "text" || colType === "string" || colType === "datetime";
     });
     
-    // Filter number columns for measures
+    const halfIndex = Math.ceil(textColumns.length / 2);
+    const pivotRowColumns = textColumns.slice(0, halfIndex);
+    const pivotColumnColumns = textColumns.slice(halfIndex);
+    
     const measureColumns = Object.keys(elementColumns).filter(col => {
       return elementColumns[col]?.columnType === "number";
     });
     
-    // Only update if we found columns
-    if (pivotRowColumns.length > 0 || measureColumns.length > 0) {
+    if (pivotRowColumns.length > 0 || pivotColumnColumns.length > 0 || measureColumns.length > 0) {
       client.config.set({
         pivotRows: pivotRowColumns,
+        pivotColumns: pivotColumnColumns,
         measures: measureColumns
       });
     }
   };
   
-  // Track first render with useRef to safely run once
   const initialRenderRef = useRef(true);
   
-  // Auto-populate columns when source changes - with safeguards
   useEffect(() => {
-    // Only run on first render AND when we have a source
     if (initialRenderRef.current && config.source && elementColumns) {
       initialRenderRef.current = false;
-      autoPopulatedRef.current = true; // Mark as populated
-      // Safely run outside current render cycle to avoid loops
+      autoPopulatedRef.current = true; 
       setTimeout(populateColumns, 0);
     }
   }, [config.source, elementColumns]);
   
   useEffect(() => {
-    setColoredItemsMap(getDefaultSelection());
-    setCountOnMap(getDefaultSelection());
+    setRowColoredItemsMap(getDefaultSelection(pivotRows));
+    setRowCountOnMap(getDefaultSelection(pivotRows));
   }, [pivotRows]);
+  
+  useEffect(() => {
+    setColColoredItemsMap(getDefaultSelection(pivotColumns));
+    setColCountOnMap(getDefaultSelection(pivotColumns));
+  }, [pivotColumns]);
 
   useEffect(() => {
     setMeasureAggregations(
@@ -136,14 +150,22 @@ function App() {
     );
   }, [measures]);
 
-  const isExportDisabled = pivotRows.length === 0 || measures.length === 0 || isLoading;
+  const isExportDisabled = (pivotRows.length === 0 && pivotColumns.length === 0) || measures.length === 0 || isLoading;
 
-  const handleCheckboxChange = (col) => {
-    setColoredItemsMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  const handleRowCheckboxChange = (col) => {
+    setRowColoredItemsMap((prev) => ({ ...prev, [col]: !prev[col] }));
   };
 
-  const handleCountOnChange = (col) => {
-    setCountOnMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  const handleRowCountOnChange = (col) => {
+    setRowCountOnMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  };
+  
+  const handleColCheckboxChange = (col) => {
+    setColColoredItemsMap((prev) => ({ ...prev, [col]: !prev[col] }));
+  };
+
+  const handleColCountOnChange = (col) => {
+    setColCountOnMap((prev) => ({ ...prev, [col]: !prev[col] }));
   };
 
   const handleAggregationChange = (col, value) => {
@@ -168,8 +190,16 @@ function App() {
           name: elementColumns[col]?.name || col,
           type: elementColumns[col]?.columnType || "unknown",
           order: index,
-          coloredItems: coloredItemsMap[col] || false,
-          countOn: countOnMap[col] || false,
+          coloredItems: rowColoredItemsMap[col] || false,
+          countOn: rowCountOnMap[col] || false,
+        })),
+        pivotColumns: pivotColumns.map((col, index) => ({
+          id: col,
+          name: elementColumns[col]?.name || col,
+          type: elementColumns[col]?.columnType || "unknown",
+          order: index,
+          coloredItems: colColoredItemsMap[col] || false,
+          countOn: colCountOnMap[col] || false,
         })),
         measures: measures.map((col, index) => ({
           id: col,
@@ -182,9 +212,9 @@ function App() {
           title: config["File-Title"],
           fileName: fileName,
         },
-        data: Object.keys(sigmaData[pivotRows[0]] || []).map((_, rowIndex) => {
+        data: Object.keys(sigmaData[(pivotRows[0] || pivotColumns[0])] || []).map((_, rowIndex) => {
           let row = {};
-          [...pivotRows, ...measures].forEach((col) => {
+          [...pivotRows, ...pivotColumns, ...measures].forEach((col) => {
             let value = sigmaData[col][rowIndex];
             if (elementColumns[col]?.columnType === "datetime") {
               value = new Date(value).toISOString().split("T")[0];
@@ -259,8 +289,8 @@ function App() {
                       <label style={styles.checkboxLabel}>
                         <input
                           type="checkbox"
-                          checked={coloredItemsMap[col] || false}
-                          onChange={() => handleCheckboxChange(col)}
+                          checked={rowColoredItemsMap[col] || false}
+                          onChange={() => handleRowCheckboxChange(col)}
                           style={styles.checkbox}
                         />
                         <span style={styles.checkboxText}>Highlight</span>
@@ -268,8 +298,8 @@ function App() {
                       <label style={styles.checkboxLabel}>
                         <input
                           type="checkbox"
-                          checked={countOnMap[col] || false}
-                          onChange={() => handleCountOnChange(col)}
+                          checked={rowCountOnMap[col] || false}
+                          onChange={() => handleRowCountOnChange(col)}
                           style={styles.checkbox}
                         />
                         <span style={styles.checkboxText}>Count On Label</span>
@@ -283,8 +313,50 @@ function App() {
             </div>
           </div>
           
-          {/* Measures Section */}
+          {/* Pivot Columns Section */}
           <div style={styles.section}>
+            <div style={styles.sectionHeader}>
+              <h4 style={styles.subheading}>Pivot Columns</h4>
+              <p style={styles.description}>Select which pivot columns to highlight </p>
+            </div>
+            
+            <div style={styles.itemList}>
+              {pivotColumns.length > 0 ? (
+                pivotColumns.map((col) => (
+                  <div key={col} style={styles.pivotRowItem}>
+                    <span style={styles.pivotName}>{elementColumns[col]?.name || col}</span>
+                    <div style={styles.checkboxGroup}>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={colColoredItemsMap[col] || false}
+                          onChange={() => handleColCheckboxChange(col)}
+                          style={styles.checkbox}
+                        />
+                        <span style={styles.checkboxText}>Highlight</span>
+                      </label>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={colCountOnMap[col] || false}
+                          onChange={() => handleColCountOnChange(col)}
+                          style={styles.checkbox}
+                        />
+                        <span style={styles.checkboxText}>Count On Label</span>
+                      </label>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p style={styles.emptyMessage}>Please select pivot columns in the configuration panel</p>
+              )}
+            </div>
+          </div>
+        </div>
+        
+        <div style={styles.cardContent}>
+          {/* Measures Section */}
+          <div style={styles.fullSection}>
             <div style={styles.sectionHeader}>
               <h4 style={styles.subheading}>Measures</h4>
               <p style={styles.description}>Select aggregation type for measures.</p>
@@ -335,12 +407,12 @@ function App() {
             )}
           </button>
           
-          {!isLoading && (pivotRows.length === 0 || measures.length === 0) && (
+          {!isLoading && ((pivotRows.length === 0 && pivotColumns.length === 0) || measures.length === 0) && (
             <p style={styles.helperText}>
-              {pivotRows.length === 0 && measures.length === 0 
-                ? "Please select both pivot rows and measures to enable export" 
-                : pivotRows.length === 0 
-                  ? "Please select pivot rows to enable export" 
+              {(pivotRows.length === 0 && pivotColumns.length === 0) && measures.length === 0 
+                ? "Please select pivot rows/columns and measures to enable export" 
+                : (pivotRows.length === 0 && pivotColumns.length === 0)
+                  ? "Please select pivot rows or columns to enable export" 
                   : "Please select measures to enable export"}
             </p>
           )}
@@ -398,6 +470,9 @@ const styles = {
   },
   section: {
     flex: "1 1 50%",
+  },
+  fullSection: {
+    flex: "1 1 100%",
   },
   sectionHeader: {
     marginBottom: "12px",
